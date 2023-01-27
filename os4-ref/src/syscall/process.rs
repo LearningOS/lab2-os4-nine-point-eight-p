@@ -1,7 +1,10 @@
 //! Process management syscalls
 
+use core::iter::zip;
+
 use crate::config::MAX_SYSCALL_NUM;
-use crate::task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus};
+use crate::mm::translated_byte_buffer;
+use crate::task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus, current_user_token};
 use crate::timer::get_time_us;
 
 #[repr(C)]
@@ -32,13 +35,26 @@ pub fn sys_yield() -> isize {
 
 // YOUR JOB: 引入虚地址后重写 sys_get_time
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    let _us = get_time_us();
-    // unsafe {
-    //     *ts = TimeVal {
-    //         sec: us / 1_000_000,
-    //         usec: us % 1_000_000,
-    //     };
-    // }
+    // Get time
+    let us = get_time_us();
+    let time = TimeVal {
+        sec: us / 1_000_000,
+        usec: us % 1_000_000,
+    };
+    // Convert time object into byte slice
+    let len = core::mem::size_of::<TimeVal>();
+    let time = unsafe {
+        core::slice::from_raw_parts((&time as *const _) as *const u8, len)
+    };
+    // Translate virtual address into physical addresses
+    let buffers = translated_byte_buffer(current_user_token(), _ts as *const u8, _tz);
+    // Copy to buffers
+    let mut pos = 0;
+    for buffer in buffers {
+        let copy_len = buffer.len().min(len - pos);
+        buffer.copy_from_slice(&time[pos..(pos + copy_len + 1)]);
+        pos += copy_len;
+    }
     0
 }
 
