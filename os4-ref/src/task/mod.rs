@@ -14,8 +14,11 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_app_data, get_num_app};
 use crate::sync::UPSafeCell;
+use crate::syscall::TaskInfo;
+use crate::timer::get_time_us;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
@@ -147,6 +150,30 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// Increase syscall count for current task.
+    fn increase_syscall_count(&self, syscall_id: u16) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let val = inner.tasks[current].syscall_times.entry(syscall_id).or_insert(0);
+        *val += 1;
+    }
+
+    /// Get information of current task.
+    fn get_current_task_info(&self) -> TaskInfo {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let mut count = [0u32; MAX_SYSCALL_NUM];
+        for (key, val) in inner.tasks[current].syscall_times.iter() {
+            count[*key as usize] = *val;
+        }
+        let time = (get_time_us() - inner.tasks[current].init_time) / 1000; // Convert us to ms
+        TaskInfo {
+            status: inner.tasks[current].task_status,
+            syscall_times: count,
+            time,
+        }
+    }
 }
 
 /// Run the first task in task list.
@@ -182,6 +209,11 @@ pub fn exit_current_and_run_next() {
     run_next_task();
 }
 
+/// Increase the current 'Running' tasks's count for syscall [id].
+pub fn increase_syscall_count(syscall_id: usize) {
+    TASK_MANAGER.increase_syscall_count(syscall_id as u16);
+}
+
 /// Get the current 'Running' task's token.
 pub fn current_user_token() -> usize {
     TASK_MANAGER.get_current_token()
@@ -190,4 +222,9 @@ pub fn current_user_token() -> usize {
 /// Get the current 'Running' task's trap contexts.
 pub fn current_trap_cx() -> &'static mut TrapContext {
     TASK_MANAGER.get_current_trap_cx()
+}
+
+/// Get the current 'Running' task's information.
+pub fn current_task_info() -> TaskInfo {
+    TASK_MANAGER.get_current_task_info()
 }

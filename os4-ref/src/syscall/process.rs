@@ -4,7 +4,7 @@ use core::iter::zip;
 
 use crate::config::MAX_SYSCALL_NUM;
 use crate::mm::translated_byte_buffer;
-use crate::task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus, current_user_token};
+use crate::task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus, current_task_info, current_user_token};
 use crate::timer::get_time_us;
 
 #[repr(C)]
@@ -74,5 +74,25 @@ pub fn sys_munmap(_start: usize, _len: usize) -> isize {
 
 // YOUR JOB: 引入虚地址后重写 sys_task_info
 pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
-    -1
+    let task_info = current_task_info();
+    copy_to_raw(ti, None, &task_info);
+    0
+}
+
+fn copy_to_raw<T>(ptr: *mut T, size: Option<usize>, object: &T) {
+    // Convert object into byte slice
+    let object_len = core::mem::size_of::<T>();
+    let object_slice = unsafe {
+        core::slice::from_raw_parts((object as *const _) as *const u8, object_len)
+    };
+    // Translate virtual address into physical addresses
+    let size = size.unwrap_or(object_len);
+    let buffers = translated_byte_buffer(current_user_token(), ptr as *const u8, size);
+    // Copy to buffers
+    let mut pos = 0;
+    for buffer in buffers {
+        let copy_len = buffer.len().min(object_len - pos);
+        buffer.copy_from_slice(&object_slice[pos..(pos + copy_len + 1)]);
+        pos += copy_len;
+    }
 }
