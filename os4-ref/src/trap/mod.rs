@@ -57,7 +57,6 @@ pub fn trap_handler() -> ! {
     let stval = stval::read();
     match scause.cause() {
         Trap::Exception(Exception::UserEnvCall) => {
-            increase_syscall_count(cx.x[17]);
             cx.sepc += 4;
             cx.x[10] = syscall(cx.x[17], [cx.x[10], cx.x[11], cx.x[12]]) as usize;
         }
