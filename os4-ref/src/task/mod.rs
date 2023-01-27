@@ -240,6 +240,8 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 pub fn current_task_info() -> TaskInfo {
     TASK_MANAGER.get_current_task_info()
 }
+
+/// Map new area for the current 'Running' task.
 pub fn map_for_current(start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) -> OSResult {
     TASK_MANAGER.map_area(start_va, end_va, permission)
 }

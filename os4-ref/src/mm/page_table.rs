@@ -119,11 +119,11 @@ impl PageTable {
     pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) -> OSResult {
         let pte = self.find_pte_create(vpn).unwrap();
         // assert!(!pte.is_valid(), "vpn {:?} is mapped before mapping", vpn);
-        if (!pte.is_valid()) {
-            Err((ErrorSource::PageTable, ErrorType::PageAlreadyMapped))
-        } else {
+        if !pte.is_valid() {
             *pte = PageTableEntry::new(ppn, flags | PTEFlags::V);
             Ok(())
+        } else {
+            Err((ErrorSource::PageTable, ErrorType::PageAlreadyMapped))
         }
     }
     #[allow(unused)]
@@ -131,10 +131,10 @@ impl PageTable {
         let pte = self.find_pte_create(vpn).unwrap();
         // assert!(pte.is_valid(), "vpn {:?} is invalid before unmapping", vpn);
         if pte.is_valid() {
-            Err((ErrorSource::PageTable, ErrorType::PageNotMapped))
-        } else {
             *pte = PageTableEntry::empty();
             Ok(())
+        } else {
+            Err((ErrorSource::PageTable, ErrorType::PageNotMapped))
         }
     }
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
