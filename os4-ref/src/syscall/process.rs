@@ -1,6 +1,6 @@
 //! Process management syscalls
 
-use core::iter::zip;
+use core::fmt::Debug;
 
 use crate::config::MAX_SYSCALL_NUM;
 use crate::mm::translated_byte_buffer;
@@ -41,20 +41,7 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
         sec: us / 1_000_000,
         usec: us % 1_000_000,
     };
-    // Convert time object into byte slice
-    let len = core::mem::size_of::<TimeVal>();
-    let time = unsafe {
-        core::slice::from_raw_parts((&time as *const _) as *const u8, len)
-    };
-    // Translate virtual address into physical addresses
-    let buffers = translated_byte_buffer(current_user_token(), _ts as *const u8, _tz);
-    // Copy to buffers
-    let mut pos = 0;
-    for buffer in buffers {
-        let copy_len = buffer.len().min(len - pos);
-        buffer.copy_from_slice(&time[pos..(pos + copy_len + 1)]);
-        pos += copy_len;
-    }
+    copy_to_raw(_ts, &time);
     0
 }
 
@@ -75,24 +62,28 @@ pub fn sys_munmap(_start: usize, _len: usize) -> isize {
 // YOUR JOB: 引入虚地址后重写 sys_task_info
 pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
     let task_info = current_task_info();
-    copy_to_raw(ti, None, &task_info);
+    copy_to_raw(ti, &task_info);
     0
 }
 
-fn copy_to_raw<T>(ptr: *mut T, size: Option<usize>, object: &T) {
+/// Copy an object to a raw pointer under vm.
+fn copy_to_raw<T>(ptr: *mut T, object: &T)
+{
     // Convert object into byte slice
     let object_len = core::mem::size_of::<T>();
     let object_slice = unsafe {
         core::slice::from_raw_parts((object as *const _) as *const u8, object_len)
     };
     // Translate virtual address into physical addresses
-    let size = size.unwrap_or(object_len);
-    let buffers = translated_byte_buffer(current_user_token(), ptr as *const u8, size);
+    let buffers = translated_byte_buffer(current_user_token(), ptr as *const u8, object_len);
     // Copy to buffers
     let mut pos = 0;
     for buffer in buffers {
         let copy_len = buffer.len().min(object_len - pos);
-        buffer.copy_from_slice(&object_slice[pos..(pos + copy_len + 1)]);
+        buffer[..copy_len].copy_from_slice(&object_slice[pos..(pos + copy_len)]);
         pos += copy_len;
+        if object_len <= pos {
+            break;
+        }
     }
 }
