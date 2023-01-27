@@ -14,6 +14,7 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::error::OSResult;
 use crate::loader::{get_app_data, get_num_app};
 use crate::mm::{VirtAddr, MapPermission};
 use crate::sync::UPSafeCell;
@@ -149,10 +150,10 @@ impl TaskManager {
         }
     }
 
-    fn map_area(&self, start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) {
+    fn map_area(&self, start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) -> OSResult {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
-        inner.tasks[current].memory_set.insert_framed_area(start_va, end_va, permission);
+        inner.tasks[current].memory_set.insert_framed_area(start_va, end_va, permission)
     }
 }
 
@@ -199,6 +200,6 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
     TASK_MANAGER.get_current_trap_cx()
 }
 
-pub fn map_for_current(start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) {
+pub fn map_for_current(start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) -> OSResult {
     TASK_MANAGER.map_area(start_va, end_va, permission)
 }

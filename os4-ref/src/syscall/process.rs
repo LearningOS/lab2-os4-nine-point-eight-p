@@ -1,12 +1,10 @@
 //! Process management syscalls
 
-use core::iter::Map;
-
 use riscv::addr::BitField;
 
-use crate::config::{MAX_SYSCALL_NUM, PAGE_SIZE};
-use crate::mm::{VirtPageNum, VirtAddr, MapPermission};
-use crate::task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus, current_user_token, map_for_current};
+use crate::config::{MAX_SYSCALL_NUM};
+use crate::mm::{VirtAddr, MapPermission};
+use crate::task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus, map_for_current};
 use crate::timer::get_time_us;
 
 #[repr(C)]
@@ -71,8 +69,10 @@ pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
         return 0;
     }
     // Map
-    map_for_current(start, end, perm);
-    0
+    match map_for_current(start, end, perm) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
 }
 
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
