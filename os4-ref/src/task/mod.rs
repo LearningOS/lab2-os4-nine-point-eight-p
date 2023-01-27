@@ -181,10 +181,18 @@ impl TaskManager {
         }
     }
 
+    /// Map new area for current task.
     fn map_area(&self, start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) -> OSResult {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
         inner.tasks[current].memory_set.insert_framed_area(start_va, end_va, permission)
+    }
+    
+    /// Map new area for current task.
+    fn unmap_area(&self, start_va: VirtAddr, end_va: VirtAddr) -> OSResult {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.remove_framed_area(start_va, end_va)
     }
 }
 
@@ -244,4 +252,9 @@ pub fn current_task_info() -> TaskInfo {
 /// Map new area for the current 'Running' task.
 pub fn map_for_current(start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) -> OSResult {
     TASK_MANAGER.map_area(start_va, end_va, permission)
+}
+
+/// Unmap allocated area for the current 'Running' task.
+pub fn unmap_for_current(start_va: VirtAddr, end_va: VirtAddr) -> OSResult {
+    TASK_MANAGER.unmap_area(start_va, end_va)
 }

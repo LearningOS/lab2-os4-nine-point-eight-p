@@ -7,7 +7,7 @@ use riscv::addr::BitField;
 use crate::config::{MAX_SYSCALL_NUM};
 use crate::mm::{VirtAddr, MapPermission};
 use crate::mm::translated_byte_buffer;
-use crate::task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus, current_task_info, current_user_token, map_for_current};
+use crate::task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus, current_task_info, current_user_token, map_for_current, unmap_for_current};
 use crate::timer::get_time_us;
 
 #[repr(C)]
@@ -79,7 +79,22 @@ pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
 }
 
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    -1
+    // Get virtual address
+    let start: VirtAddr = _start.into();
+    let end: VirtAddr = (_start + _len).into(); // not aligned
+    // Check start
+    if start.aligned() == false {
+        return -1;
+    }
+    // Check length
+    if _len == 0 {
+        return 0;
+    }
+    // Unmap
+    match unmap_for_current(start, end) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
 }
 
 // YOUR JOB: 引入虚地址后重写 sys_task_info

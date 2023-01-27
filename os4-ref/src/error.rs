@@ -16,6 +16,7 @@ pub enum ErrorType {
     // Map / Unmap
     PageAlreadyMapped,
     PageNotMapped,
+    PageNotFound,
 
     // Unknown
     Unknown,

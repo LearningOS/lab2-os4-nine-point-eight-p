@@ -5,7 +5,7 @@ use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
 use crate::config::{MEMORY_END, PAGE_SIZE, TRAMPOLINE, TRAP_CONTEXT, USER_STACK_SIZE};
-use crate::error::OSResult;
+use crate::error::{OSResult, ErrorType, ErrorSource};
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -66,6 +66,22 @@ impl MemorySet {
             map_area.copy_data(&mut self.page_table, data);
         }
         self.areas.push(map_area);
+        Ok(())
+    }
+    pub fn remove_framed_area(
+        &mut self,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+    ) -> OSResult {
+        let start_vpn: VirtPageNum = start_va.floor();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        for area in self.areas.iter_mut() {
+            if area.overlap_vpn(start_vpn, end_vpn) {
+                for vpn in VPNRange::new(start_vpn, end_vpn) {
+                    area.unmap_one(&mut self.page_table, vpn)?;
+                }
+            }
+        }
         Ok(())
     }
     /// Mention that trampoline is not collected by areas.
@@ -262,6 +278,9 @@ impl MapArea {
     }
     #[allow(unused)]
     pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) -> OSResult {
+        if !self.vpn_range.contains(vpn) {
+            return Ok(())
+        }
         #[allow(clippy::single_match)]
         match self.map_type {
             MapType::Framed => {
@@ -273,14 +292,14 @@ impl MapArea {
     }
     pub fn map(&mut self, page_table: &mut PageTable) -> OSResult {
         for vpn in self.vpn_range {
-            self.map_one(page_table, vpn)?
+            self.map_one(page_table, vpn)?;
         }
         Ok(())
     }
     #[allow(unused)]
     pub fn unmap(&mut self, page_table: &mut PageTable) -> OSResult {
         for vpn in self.vpn_range {
-            self.unmap_one(page_table, vpn)?
+            self.unmap_one(page_table, vpn)?;
         }
         Ok(())
     }
@@ -305,6 +324,10 @@ impl MapArea {
             }
             current_vpn.step();
         }
+    }
+    /// Check if the area overlaps with [start_vpn, end_vpn).
+    pub fn overlap_vpn(&self, start_vpn: VirtPageNum, end_vpn: VirtPageNum) -> bool {
+        self.vpn_range.overlaps(VPNRange::new(start_vpn, end_vpn))
     }
 }
 
