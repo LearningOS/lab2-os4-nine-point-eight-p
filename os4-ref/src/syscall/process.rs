@@ -2,9 +2,12 @@
 
 use core::fmt::Debug;
 
-use crate::config::MAX_SYSCALL_NUM;
+use riscv::addr::BitField;
+
+use crate::config::{MAX_SYSCALL_NUM};
+use crate::mm::{VirtAddr, MapPermission};
 use crate::mm::translated_byte_buffer;
-use crate::task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus, current_task_info, current_user_token};
+use crate::task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus, current_task_info, current_user_token, map_for_current};
 use crate::timer::get_time_us;
 
 #[repr(C)]
@@ -52,7 +55,27 @@ pub fn sys_set_priority(_prio: isize) -> isize {
 
 // YOUR JOB: 扩展内核以实现 sys_mmap 和 sys_munmap
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    -1
+    // Get virtual address
+    let start: VirtAddr = _start.into();
+    let end: VirtAddr = (_start + _len).into(); // not aligned
+    // Check start
+    if start.aligned() == false {
+        return -1;
+    }
+    // Check port
+    if _port.get_bits(3..) != 0 || _port.get_bits(0..3) == 0 {
+        return -1;
+    }
+    let perm = MapPermission::U | MapPermission::from_bits((_port.get_bits(0..3) << 1) as u8).unwrap();
+    // Check length
+    if _len == 0 {
+        return 0;
+    }
+    // Map
+    match map_for_current(start, end, perm) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
 }
 
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {

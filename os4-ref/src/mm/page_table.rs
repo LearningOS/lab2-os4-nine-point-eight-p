@@ -1,5 +1,7 @@
 //! Implementation of [`PageTableEntry`] and [`PageTable`].
 
+use crate::error::{OSResult, ErrorSource, ErrorType};
+
 use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -114,16 +116,26 @@ impl PageTable {
         result
     }
     #[allow(unused)]
-    pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) {
+    pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) -> OSResult {
         let pte = self.find_pte_create(vpn).unwrap();
-        assert!(!pte.is_valid(), "vpn {:?} is mapped before mapping", vpn);
-        *pte = PageTableEntry::new(ppn, flags | PTEFlags::V);
+        // assert!(!pte.is_valid(), "vpn {:?} is mapped before mapping", vpn);
+        if (!pte.is_valid()) {
+            Err((ErrorSource::PageTable, ErrorType::PageAlreadyMapped))
+        } else {
+            *pte = PageTableEntry::new(ppn, flags | PTEFlags::V);
+            Ok(())
+        }
     }
     #[allow(unused)]
-    pub fn unmap(&mut self, vpn: VirtPageNum) {
+    pub fn unmap(&mut self, vpn: VirtPageNum) -> OSResult {
         let pte = self.find_pte_create(vpn).unwrap();
-        assert!(pte.is_valid(), "vpn {:?} is invalid before unmapping", vpn);
-        *pte = PageTableEntry::empty();
+        // assert!(pte.is_valid(), "vpn {:?} is invalid before unmapping", vpn);
+        if pte.is_valid() {
+            Err((ErrorSource::PageTable, ErrorType::PageNotMapped))
+        } else {
+            *pte = PageTableEntry::empty();
+            Ok(())
+        }
     }
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.find_pte(vpn).copied()
