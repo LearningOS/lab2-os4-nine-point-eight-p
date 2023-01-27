@@ -1,7 +1,7 @@
 //! Process management syscalls
 
 use crate::config::MAX_SYSCALL_NUM;
-use crate::task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus};
+use crate::task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus, current_task_info};
 use crate::timer::get_time_us;
 
 #[repr(C)]
@@ -58,5 +58,11 @@ pub fn sys_munmap(_start: usize, _len: usize) -> isize {
 
 // YOUR JOB: 引入虚地址后重写 sys_task_info
 pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
-    -1
+    let task_info = current_task_info();
+    copy_to_raw(ti, &task_info);
+    0
+}
+
+fn copy_to_raw<T>(ptr: *mut T, object: &T) {
+    unimplemented!()
 }

@@ -1,4 +1,6 @@
 //! Types related to task management
+use alloc::collections::BTreeMap;
+
 use super::TaskContext;
 use crate::config::{kernel_stack_position, TRAP_CONTEXT};
 use crate::mm::{MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
@@ -8,6 +10,8 @@ use crate::trap::{trap_handler, TrapContext};
 pub struct TaskControlBlock {
     pub task_status: TaskStatus,
     pub task_cx: TaskContext,
+    pub init_time: usize,
+    pub syscall_times: BTreeMap<u16, u32>,
     pub memory_set: MemorySet,
     pub trap_cx_ppn: PhysPageNum,
     pub base_size: usize,
@@ -38,6 +42,8 @@ impl TaskControlBlock {
         let task_control_block = Self {
             task_status,
             task_cx: TaskContext::goto_trap_return(kernel_stack_top),
+            init_time: 0,
+            syscall_times: BTreeMap::new(),
             memory_set,
             trap_cx_ppn,
             base_size: user_sp,
