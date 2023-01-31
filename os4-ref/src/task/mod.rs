@@ -20,7 +20,7 @@ use crate::loader::{get_app_data, get_num_app};
 use crate::mm::{VirtAddr, MapPermission};
 use crate::sync::UPSafeCell;
 use crate::syscall::TaskInfo;
-use crate::timer::{get_time_us, get_time};
+use crate::timer::get_time_us;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;

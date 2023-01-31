@@ -1,5 +1,8 @@
 //! Implementation of [`MapArea`] and [`MemorySet`].
 
+use core::cmp::{min, max};
+use core::mem::{swap, take};
+
 use super::{frame_alloc, FrameTracker};
 use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
@@ -75,11 +78,30 @@ impl MemorySet {
     ) -> OSResult {
         let start_vpn: VirtPageNum = start_va.floor();
         let end_vpn: VirtPageNum = end_va.ceil();
-        for area in self.areas.iter_mut() {
-            if area.overlap_vpn(start_vpn, end_vpn) {
-                for vpn in VPNRange::new(start_vpn, end_vpn) {
-                    area.unmap_one(&mut self.page_table, vpn)?;
+        // Check if target range contains invalid page
+        for vpn in VPNRange::new(start_vpn, end_vpn) {
+            let valid = self.areas.iter().any(|area| area.vpn_range.contains(vpn));
+            if !valid {
+                return Err((ErrorSource::PageTable, ErrorType::PageNotMapped));
+            }
+        }
+        // Split and remove areas that overlaps with target range
+        let old_areas = take(&mut self.areas);
+        for mut area in old_areas.into_iter() {
+            if let Some(overlapped_range) = area.overlap_vpn_range(start_vpn, end_vpn) {
+                // Split the area (if needed)
+                let (before, after) = area.split(overlapped_range.get_start(), overlapped_range.get_end());
+                // Add new areas
+                if let Some(before) = before {
+                    self.areas.push(before);
                 }
+                if let Some(after) = after {
+                    self.areas.push(after);
+                }
+                // Upmap the modified area and discard
+                area.unmap(&mut self.page_table)?;
+            } else {
+                self.areas.push(area);
             }
         }
         Ok(())
@@ -278,9 +300,6 @@ impl MapArea {
     }
     #[allow(unused)]
     pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) -> OSResult {
-        if !self.vpn_range.contains(vpn) {
-            return Ok(())
-        }
         #[allow(clippy::single_match)]
         match self.map_type {
             MapType::Framed => {
@@ -326,8 +345,54 @@ impl MapArea {
         }
     }
     /// Check if the area overlaps with [start_vpn, end_vpn).
-    pub fn overlap_vpn(&self, start_vpn: VirtPageNum, end_vpn: VirtPageNum) -> bool {
-        self.vpn_range.overlaps(VPNRange::new(start_vpn, end_vpn))
+    pub fn overlap_vpn_range(&self, start_vpn: VirtPageNum, end_vpn: VirtPageNum) -> Option<VPNRange> {
+        if self.vpn_range.overlaps(VPNRange::new(start_vpn, end_vpn)) {
+            Some(VPNRange::new(
+                max(self.vpn_range.get_start(), start_vpn),
+                min(self.vpn_range.get_end(), end_vpn)
+            ))
+        } else {
+            None
+        }
+    }
+    /// Split current map area into three parts, i.e. [start, vpn_1), [vpn_1, vpn_2), [vpn_2, end).
+    /// The current area becomes the middle one, and the other two are returned.
+    pub fn split(&mut self, vpn_1: VirtPageNum, vpn_2: VirtPageNum) -> (Option<Self>, Option<Self>) {
+        let start = self.vpn_range.get_start();
+        let end = self.vpn_range.get_end();
+        // If out of range
+        if vpn_1 < start || end <= vpn_2 {
+            return (None, None);
+        }
+        // Segment before the target
+        let before = if start < vpn_1 {
+            self.vpn_range = VPNRange::new(vpn_1, end); // modify current range
+            let mut new_data_frames = self.data_frames.split_off(&vpn_1);
+            swap(&mut new_data_frames, &mut self.data_frames); // now new_data_frames takes the first part
+            Some(Self {
+                vpn_range: VPNRange::new(start, vpn_1),
+                data_frames: new_data_frames,
+                map_type: self.map_type,
+                map_perm: self.map_perm,
+            })
+        } else {
+            None
+        };
+        // Segment after the target
+        let after = if vpn_2 < end {
+            let new_start = self.vpn_range.get_start();
+            self.vpn_range = VPNRange::new(new_start, vpn_2); // modify current range
+            Some(Self {
+                vpn_range: VPNRange::new(vpn_2, end),
+                data_frames: self.data_frames.split_off(&vpn_2),
+                map_type: self.map_type,
+                map_perm: self.map_perm,
+            })
+        } else {
+            None
+        };
+
+        (before, after)
     }
 }
 
