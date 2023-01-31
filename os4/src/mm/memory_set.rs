@@ -1,10 +1,14 @@
 //! Implementation of [`MapArea`] and [`MemorySet`].
 
+use core::cmp::{min, max};
+use core::mem::{swap, take};
+
 use super::{frame_alloc, FrameTracker};
 use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
 use crate::config::{MEMORY_END, PAGE_SIZE, TRAMPOLINE, TRAP_CONTEXT, USER_STACK_SIZE};
+use crate::error::{OSResult, ErrorType, ErrorSource};
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -53,18 +57,54 @@ impl MemorySet {
         start_va: VirtAddr,
         end_va: VirtAddr,
         permission: MapPermission,
-    ) {
+    ) -> OSResult {
         self.push(
             MapArea::new(start_va, end_va, MapType::Framed, permission),
             None,
-        );
+        )
     }
-    fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
-        map_area.map(&mut self.page_table);
+    fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) -> OSResult {
+        map_area.map(&mut self.page_table)?;
         if let Some(data) = data {
             map_area.copy_data(&mut self.page_table, data);
         }
         self.areas.push(map_area);
+        Ok(())
+    }
+    pub fn remove_framed_area(
+        &mut self,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+    ) -> OSResult {
+        let start_vpn: VirtPageNum = start_va.floor();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        // Check if target range contains invalid page
+        for vpn in VPNRange::new(start_vpn, end_vpn) {
+            let valid = self.areas.iter().any(|area| area.vpn_range.contains(vpn));
+            if !valid {
+                return Err((ErrorSource::PageTable, ErrorType::PageNotMapped));
+            }
+        }
+        // Split and remove areas that overlaps with target range
+        let old_areas = take(&mut self.areas);
+        for mut area in old_areas.into_iter() {
+            if let Some(overlapped_range) = area.overlap_vpn_range(start_vpn, end_vpn) {
+                // Split the area (if needed)
+                let (before, after) = area.split(overlapped_range.get_start(), overlapped_range.get_end());
+                // Add new areas
+                if let Some(before) = before {
+                    self.areas.push(before);
+                }
+                if let Some(after) = after {
+                    self.areas.push(after);
+                }
+                // Upmap the modified area and discard
+                area.unmap(&mut self.page_table)?;
+            } else {
+                self.areas.push(area);
+            }
+        }
+        Ok(())
     }
     /// Mention that trampoline is not collected by areas.
     fn map_trampoline(&mut self) {
@@ -72,7 +112,7 @@ impl MemorySet {
             VirtAddr::from(TRAMPOLINE).into(),
             PhysAddr::from(strampoline as usize).into(),
             PTEFlags::R | PTEFlags::X,
-        );
+        ).unwrap();
     }
     /// Without kernel stacks.
     pub fn new_kernel() -> Self {
@@ -96,7 +136,7 @@ impl MemorySet {
                 MapPermission::R | MapPermission::X,
             ),
             None,
-        );
+        ).unwrap();
         info!("mapping .rodata section");
         memory_set.push(
             MapArea::new(
@@ -106,7 +146,7 @@ impl MemorySet {
                 MapPermission::R,
             ),
             None,
-        );
+        ).unwrap();
         info!("mapping .data section");
         memory_set.push(
             MapArea::new(
@@ -116,7 +156,7 @@ impl MemorySet {
                 MapPermission::R | MapPermission::W,
             ),
             None,
-        );
+        ).unwrap();
         info!("mapping .bss section");
         memory_set.push(
             MapArea::new(
@@ -126,7 +166,7 @@ impl MemorySet {
                 MapPermission::R | MapPermission::W,
             ),
             None,
-        );
+        ).unwrap();
         info!("mapping physical memory");
         memory_set.push(
             MapArea::new(
@@ -136,7 +176,7 @@ impl MemorySet {
                 MapPermission::R | MapPermission::W,
             ),
             None,
-        );
+        ).unwrap();
         memory_set
     }
     /// Include sections in elf and trampoline and TrapContext and user stack,
@@ -173,7 +213,7 @@ impl MemorySet {
                 memory_set.push(
                     map_area,
                     Some(&elf.input[ph.offset() as usize..(ph.offset() + ph.file_size()) as usize]),
-                );
+                ).unwrap();
             }
         }
         // map user stack with U flags
@@ -190,7 +230,7 @@ impl MemorySet {
                 MapPermission::R | MapPermission::W | MapPermission::U,
             ),
             None,
-        );
+        ).unwrap();
         // map TrapContext
         memory_set.push(
             MapArea::new(
@@ -200,7 +240,7 @@ impl MemorySet {
                 MapPermission::R | MapPermission::W,
             ),
             None,
-        );
+        ).unwrap();
         (
             memory_set,
             user_stack_top,
@@ -243,7 +283,7 @@ impl MapArea {
             map_perm,
         }
     }
-    pub fn map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
+    pub fn map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) -> OSResult {
         let ppn: PhysPageNum;
         match self.map_type {
             MapType::Identical => {
@@ -256,10 +296,10 @@ impl MapArea {
             }
         }
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
-        page_table.map(vpn, ppn, pte_flags);
+        page_table.map(vpn, ppn, pte_flags)
     }
     #[allow(unused)]
-    pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
+    pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) -> OSResult {
         #[allow(clippy::single_match)]
         match self.map_type {
             MapType::Framed => {
@@ -267,18 +307,20 @@ impl MapArea {
             }
             _ => {}
         }
-        page_table.unmap(vpn);
+        page_table.unmap(vpn)
     }
-    pub fn map(&mut self, page_table: &mut PageTable) {
+    pub fn map(&mut self, page_table: &mut PageTable) -> OSResult {
         for vpn in self.vpn_range {
-            self.map_one(page_table, vpn);
+            self.map_one(page_table, vpn)?;
         }
+        Ok(())
     }
     #[allow(unused)]
-    pub fn unmap(&mut self, page_table: &mut PageTable) {
+    pub fn unmap(&mut self, page_table: &mut PageTable) -> OSResult {
         for vpn in self.vpn_range {
-            self.unmap_one(page_table, vpn);
+            self.unmap_one(page_table, vpn)?;
         }
+        Ok(())
     }
     /// data: start-aligned but maybe with shorter length
     /// assume that all frames were cleared before
@@ -301,6 +343,56 @@ impl MapArea {
             }
             current_vpn.step();
         }
+    }
+    /// Check if the area overlaps with [start_vpn, end_vpn).
+    pub fn overlap_vpn_range(&self, start_vpn: VirtPageNum, end_vpn: VirtPageNum) -> Option<VPNRange> {
+        if self.vpn_range.overlaps(VPNRange::new(start_vpn, end_vpn)) {
+            Some(VPNRange::new(
+                max(self.vpn_range.get_start(), start_vpn),
+                min(self.vpn_range.get_end(), end_vpn)
+            ))
+        } else {
+            None
+        }
+    }
+    /// Split current map area into three parts, i.e. [start, vpn_1), [vpn_1, vpn_2), [vpn_2, end).
+    /// The current area becomes the middle one, and the other two are returned.
+    pub fn split(&mut self, vpn_1: VirtPageNum, vpn_2: VirtPageNum) -> (Option<Self>, Option<Self>) {
+        let start = self.vpn_range.get_start();
+        let end = self.vpn_range.get_end();
+        // If out of range
+        if vpn_1 < start || end <= vpn_2 {
+            return (None, None);
+        }
+        // Segment before the target
+        let before = if start < vpn_1 {
+            self.vpn_range = VPNRange::new(vpn_1, end); // modify current range
+            let mut new_data_frames = self.data_frames.split_off(&vpn_1);
+            swap(&mut new_data_frames, &mut self.data_frames); // now new_data_frames takes the first part
+            Some(Self {
+                vpn_range: VPNRange::new(start, vpn_1),
+                data_frames: new_data_frames,
+                map_type: self.map_type,
+                map_perm: self.map_perm,
+            })
+        } else {
+            None
+        };
+        // Segment after the target
+        let after = if vpn_2 < end {
+            let new_start = self.vpn_range.get_start();
+            self.vpn_range = VPNRange::new(new_start, vpn_2); // modify current range
+            Some(Self {
+                vpn_range: VPNRange::new(vpn_2, end),
+                data_frames: self.data_frames.split_off(&vpn_2),
+                map_type: self.map_type,
+                map_perm: self.map_perm,
+            })
+        } else {
+            None
+        };
+
+        (before, after)
     }
 }
 

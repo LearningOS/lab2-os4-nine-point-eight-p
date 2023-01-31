@@ -14,8 +14,13 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::error::OSResult;
+use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{VirtAddr, MapPermission};
 use crate::sync::UPSafeCell;
+use crate::syscall::TaskInfo;
+use crate::timer::get_time_us;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
@@ -79,6 +84,7 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
         next_task.task_status = TaskStatus::Running;
+        next_task.init_time = get_time_us();
         let next_task_cx_ptr = &next_task.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -134,6 +140,9 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
+            if inner.tasks[next].init_time == 0 {
+                inner.tasks[next].init_time = get_time_us();
+            }
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -146,6 +155,44 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+
+    /// Increase syscall count for current task.
+    fn increase_syscall_count(&self, syscall_id: u16) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let val = inner.tasks[current].syscall_times.entry(syscall_id).or_insert(0);
+        *val += 1;
+    }
+
+    /// Get information of current task.
+    fn get_current_task_info(&self) -> TaskInfo {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let mut count = [0u32; MAX_SYSCALL_NUM];
+        for (key, val) in inner.tasks[current].syscall_times.iter() {
+            count[*key as usize] = *val;
+        }
+        let time = (get_time_us() - inner.tasks[current].init_time) / 1000; // Convert us to ms
+        TaskInfo {
+            status: inner.tasks[current].task_status,
+            syscall_times: count,
+            time,
+        }
+    }
+
+    /// Map new area for current task.
+    fn map_area(&self, start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) -> OSResult {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.insert_framed_area(start_va, end_va, permission)
+    }
+    
+    /// Map new area for current task.
+    fn unmap_area(&self, start_va: VirtAddr, end_va: VirtAddr) -> OSResult {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.remove_framed_area(start_va, end_va)
     }
 }
 
@@ -182,6 +229,11 @@ pub fn exit_current_and_run_next() {
     run_next_task();
 }
 
+/// Increase the current 'Running' tasks's count for syscall [id].
+pub fn increase_syscall_count(syscall_id: usize) {
+    TASK_MANAGER.increase_syscall_count(syscall_id as u16);
+}
+
 /// Get the current 'Running' task's token.
 pub fn current_user_token() -> usize {
     TASK_MANAGER.get_current_token()
@@ -190,4 +242,19 @@ pub fn current_user_token() -> usize {
 /// Get the current 'Running' task's trap contexts.
 pub fn current_trap_cx() -> &'static mut TrapContext {
     TASK_MANAGER.get_current_trap_cx()
+}
+
+/// Get the current 'Running' task's information.
+pub fn current_task_info() -> TaskInfo {
+    TASK_MANAGER.get_current_task_info()
+}
+
+/// Map new area for the current 'Running' task.
+pub fn map_for_current(start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) -> OSResult {
+    TASK_MANAGER.map_area(start_va, end_va, permission)
+}
+
+/// Unmap allocated area for the current 'Running' task.
+pub fn unmap_for_current(start_va: VirtAddr, end_va: VirtAddr) -> OSResult {
+    TASK_MANAGER.unmap_area(start_va, end_va)
 }
